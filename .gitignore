@@ -17,3 +17,6 @@ bin/*.exe
 _work/
 *.png
 *.log
+
+# 但保留 README 截图
+!screenshots/*.png
