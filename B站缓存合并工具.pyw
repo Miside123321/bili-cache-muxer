@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-B站缓存合并工具  v2.1
+B站缓存合并工具  v2.5
 -------------------------------------------------
 版权所有 (c) 作者 wan  B站UID: 500886854  https://space.bilibili.com/500886854
 保留全部原创权利，未经许可不得用于商业用途或二次分发。
@@ -136,6 +136,112 @@ def save_config(cfg):
     try:
         with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
             json.dump(cfg, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------- 外观 / 深色模式
+
+THEME_LIGHT = {
+    'bg': '#F5F5F7', 'panel': '#FFFFFF', 'field': '#FFFFFF',
+    'fg': '#1D1D1F', 'muted': '#6E6E73', 'border': '#D2D2D7',
+    'line': '#E3E3E8',
+    'head_bg': '#ECECF0', 'sel_bg': '#CFE3F7', 'sel_fg': '#1D1D1F',
+    'accent': '#0A8F4E', 'warn': '#A05A00',
+    'done': '#1A7F1A', 'fail': '#C0392B', 'work': '#1A5FB4',
+}
+THEME_DARK = {
+    'bg': '#26262A', 'panel': '#2E2E33', 'field': '#3A3A40',
+    'fg': '#E8E8ED', 'muted': '#9A9AA1', 'border': '#45454B',
+    'line': '#35353B',
+    'head_bg': '#33333A', 'sel_bg': '#3E5D82', 'sel_fg': '#FFFFFF',
+    'accent': '#3DDC84', 'warn': '#E8A85C',
+    'done': '#6FD36F', 'fail': '#FF7B72', 'work': '#7FB4FF',
+}
+
+# 当前生效的外观（供 Toplevel 等模块级读取）
+CURRENT_THEME = {'dark': False, 'p': THEME_LIGHT}
+
+
+def system_prefers_dark():
+    """读取 Windows 系统“应用模式”是否为深色。失败则视为浅色。"""
+    if os.name != 'nt':
+        return False
+    try:
+        import winreg
+        key = winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r'Software\Microsoft\Windows\CurrentVersion\Themes\Personalize')
+        try:
+            val, _ = winreg.QueryValueEx(key, 'AppsUseLightTheme')
+        finally:
+            winreg.CloseKey(key)
+        return int(val) == 0
+    except Exception:
+        return False
+
+
+def resolve_dark(pref):
+    if pref == 'dark':
+        return True
+    if pref == 'light':
+        return False
+    return system_prefers_dark()
+
+
+def apply_global_fonts(root, base=11):
+    """统一放大全局字体（Tk 命名字体），标题字重保留。"""
+    try:
+        import tkinter.font as tkfont
+        fam = 'Microsoft YaHei UI'
+        plan = {
+            'TkDefaultFont': (fam, base),
+            'TkTextFont': (fam, base),
+            'TkMenuFont': (fam, base),
+            'TkHeadingFont': (fam, base, 'bold'),
+            'TkCaptionFont': (fam, base, 'bold'),
+            'TkSmallCaptionFont': (fam, base - 2),
+            'TkIconFont': (fam, base),
+            'TkTooltipFont': (fam, base - 2),
+        }
+        for name, spec in plan.items():
+            try:
+                tkfont.nametofont(name).configure(family=spec[0], size=spec[1],
+                                                  weight=(spec[2] if len(spec) > 2 else 'normal'))
+            except Exception:
+                pass
+        try:
+            tkfont.nametofont('TkFixedFont').configure(family='Consolas', size=base - 1)
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
+def set_dark_titlebar(window, dark):
+    """让标题栏跟随深色（Win10 1809+ 用属性20，更早用19）；
+    并把 Win11 的窗口外框改成淡色，避免深色界面外圈出现一条亮白边。"""
+    if os.name != 'nt':
+        return
+    try:
+        import ctypes
+        hwnd = ctypes.windll.user32.GetParent(window.winfo_id())
+        if not hwnd:
+            hwnd = window.winfo_id()
+        value = ctypes.c_int(1 if dark else 0)
+        for attr in (20, 19):
+            res = ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                hwnd, attr, ctypes.byref(value), ctypes.sizeof(value))
+            if res == 0:
+                break
+        # DWMWA_BORDER_COLOR(34)：Win11 窗口外框，COLORREF 为 0x00BBGGRR
+        p = THEME_DARK if dark else THEME_LIGHT
+        hx = p['line'].lstrip('#')
+        r, g, b = int(hx[0:2], 16), int(hx[2:4], 16), int(hx[4:6], 16)
+        cref = ctypes.c_int(r | (g << 8) | (b << 16))
+        ctypes.windll.dwmapi.DwmSetWindowAttribute(
+            hwnd, 34, ctypes.byref(cref), ctypes.sizeof(cref))
+        window.update_idletasks()
     except Exception:
         pass
 
@@ -739,6 +845,7 @@ class PhoneBrowser(tk.Toplevel):
         self.geometry('560x520')
         self.transient(master)
         self.grab_set()
+        self.configure(bg=CURRENT_THEME['p']['bg'])
         self.mtp = mtp
         self.device = device
         self.segs = list(start_segs or [])
@@ -750,7 +857,7 @@ class PhoneBrowser(tk.Toplevel):
         ttk.Button(top, text='← 返回上级', command=self.go_up).pack(side='left')
         ttk.Button(top, text='刷新', command=self.reload).pack(side='left', padx=4)
         self.path_var = tk.StringVar()
-        ttk.Label(top, textvariable=self.path_var, foreground='#555').pack(side='left', padx=8)
+        ttk.Label(top, textvariable=self.path_var, style='Muted.TLabel').pack(side='left', padx=8)
 
         mid = ttk.Frame(self, padding=(8, 0))
         mid.pack(fill='both', expand=True)
@@ -765,12 +872,14 @@ class PhoneBrowser(tk.Toplevel):
         self.tree.bind('<Return>', self.on_double)
 
         self.status_var = tk.StringVar()
-        ttk.Label(self, textvariable=self.status_var, foreground='#888').pack(fill='x', padx=10)
+        ttk.Label(self, textvariable=self.status_var, style='Muted.TLabel').pack(fill='x', padx=10)
 
         bot = ttk.Frame(self, padding=8)
         bot.pack(fill='x')
         ttk.Button(bot, text='选择当前文件夹', command=self.choose).pack(side='right')
         ttk.Button(bot, text='取消', command=self.destroy).pack(side='right', padx=6)
+        self.update_idletasks()
+        set_dark_titlebar(self, CURRENT_THEME['dark'])
 
         self.reload()
 
@@ -830,9 +939,12 @@ class PhoneBrowser(tk.Toplevel):
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title('B站缓存合并工具  v2.1')
-        self.geometry('1080x760')
-        self.minsize(980, 680)
+        self.title('B站缓存合并工具  v2.5')
+        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+        w, h = min(1120, sw - 60), min(920, sh - 130)
+        self.geometry('%dx%d' % (w, max(620, h)))
+        apply_global_fonts(self, base=11)
+        self.minsize(960, 600)
         self.cfg = load_config()
         self.q = queue.Queue()
         self.tasks = {}
@@ -843,9 +955,16 @@ class App(tk.Tk):
         self.stop_btn = None
         self.ffmpeg = find_ffmpeg(self.cfg)
         self.mtp = MtpClient(self.thread_log)
+        self.theme_pref = self.cfg.get('theme', 'auto')
+        self._dark = resolve_dark(self.theme_pref)
+        self._last_sys_dark = system_prefers_dark()
+        CURRENT_THEME['dark'] = self._dark
+        CURRENT_THEME['p'] = THEME_DARK if self._dark else THEME_LIGHT
 
         self._build_ui()
+        self.apply_theme(self._dark)
         self._poll_queue()
+        self.after(1000, self._watch_system_theme)
         if not self.ffmpeg:
             self.after(300, self.offer_ffmpeg_download)
             self.after(600, self.auto_detect_device)
@@ -859,6 +978,49 @@ class App(tk.Tk):
             style.theme_use('vista')
         except Exception:
             pass
+
+        # ===== 自绘菜单栏 =====
+        # Windows 原生菜单栏由系统绘制，DWM 深色只作用于标题栏，无法跟随深色，
+        # 因此改用 Tk 自绘的 Menubutton 条，颜色可完全跟随主题。
+        self.topbar = tk.Frame(self, bd=0, highlightthickness=0)
+        self.topbar.pack(fill='x', side='top')
+        self.mb_sep = tk.Frame(self.topbar, height=1, bd=0, highlightthickness=0)
+        self.mb_sep.pack(side='bottom', fill='x')
+
+        self.mb_set = tk.Menubutton(
+            self.topbar, text='设置 ▾', bd=0, relief='flat', indicatoron=False,
+            cursor='hand2', padx=12, pady=6,
+            font=('Microsoft YaHei UI', 11), highlightthickness=0)
+        m_set = tk.Menu(self.mb_set, tearoff=0)
+        self.theme_var = tk.StringVar(value=self.theme_pref)
+        m_app = tk.Menu(m_set, tearoff=0)
+        for val, lab in (('auto', '跟随系统'), ('light', '浅色模式'), ('dark', '深色模式')):
+            m_app.add_radiobutton(label=lab, value=val, variable=self.theme_var,
+                                  command=lambda v=val: self.set_theme_pref(v))
+        m_set.add_cascade(label='外观', menu=m_app)
+        m_set.add_separator()
+        m_set.add_command(label='手动指定 ffmpeg.exe…', command=self.specify_ffmpeg)
+        m_set.add_command(label='自动下载 FFmpeg…',
+                          command=lambda: self.offer_ffmpeg_download(force=True))
+        self.mb_set['menu'] = m_set
+        self.mb_set.pack(side='left', padx=(10, 2), pady=(6, 3))
+
+        self.mb_help = tk.Menubutton(
+            self.topbar, text='帮助 ▾', bd=0, relief='flat', indicatoron=False,
+            cursor='hand2', padx=12, pady=6,
+            font=('Microsoft YaHei UI', 11), highlightthickness=0)
+        m_help = tk.Menu(self.mb_help, tearoff=0)
+        m_help.add_command(label='使用说明', command=self.show_help)
+        m_help.add_command(label='关于', command=self.show_about)
+        self.mb_help['menu'] = m_help
+        self.mb_help.pack(side='left', padx=2, pady=(6, 3))
+
+        self._menus = [m_set, m_help, m_app]
+        self._mb_list = [self.mb_set, self.mb_help]
+
+        # 底部区域（进度 / 按钮 / 日志）先占位：窗口高度不够时优先压缩列表，而不是把底部挤没
+        self.bottom_area = ttk.Frame(self)
+        self.bottom_area.pack(side='bottom', fill='x')
 
         self.nb = ttk.Notebook(self)
         self.nb.pack(fill='x', padx=10, pady=(10, 6))
@@ -890,7 +1052,7 @@ class App(tk.Tk):
         ttk.Button(row1, text='刷新设备', command=self.refresh_devices).pack(side='left', padx=6)
 
         self.phone_path_var = tk.StringVar(value='内部存储设备/' + '/'.join(PHONE_DEFAULT_SEGS))
-        ttk.Label(t2, textvariable=self.phone_path_var, foreground='#555').pack(anchor='w')
+        ttk.Label(t2, textvariable=self.phone_path_var, style='Muted.TLabel').pack(anchor='w')
         btns = ttk.Frame(t2)
         btns.pack(fill='x', pady=6)
         self.scan_phone_btn = ttk.Button(btns, text='一键读取手机 B 站缓存', command=self.do_scan_phone_default)
@@ -901,7 +1063,7 @@ class App(tk.Tk):
                 '安卓 11 以上系统通常禁止电脑直接访问 Android/data，若读取为空：'
                 '在手机上用系统「文件管理」把 Android/data/tv.danmaku.bili/download '
                 '整个复制到「内部存储/Download/bili」，再点上面的「选择手机上的其他文件夹」选中它即可。')
-        ttk.Label(t2, text=hint, foreground='#a05a00', wraplength=1000, justify='left').pack(anchor='w')
+        ttk.Label(t2, text=hint, style='Warn.TLabel', wraplength=1000, justify='left').pack(anchor='w')
 
         # ===== Tab3 手动 =====
         t3 = ttk.Frame(self.nb, padding=10)
@@ -942,10 +1104,11 @@ class App(tk.Tk):
         list_frame = ttk.LabelFrame(self, text='合并列表（点「选」列勾选/取消）', padding=8)
         list_frame.pack(fill='both', expand=True, padx=10, pady=4)
         cols = ('check', 'title', 'part', 'quality', 'source', 'size', 'status', 'wb')
-        self.tree = ttk.Treeview(list_frame, columns=cols, show='headings', selectmode='extended')
-        heads = [('check', '选', 40), ('title', '标题', 240), ('part', '分P', 190),
-                 ('quality', '清晰度', 120), ('source', '来源', 80),
-                 ('size', '大小', 80), ('status', '状态', 90), ('wb', '回写', 90)]
+        self.tree = ttk.Treeview(list_frame, columns=cols, show='headings',
+                                 selectmode='extended', height=6)
+        heads = [('check', '选', 46), ('title', '标题', 250), ('part', '分P', 205),
+                 ('quality', '清晰度', 135), ('source', '来源', 92),
+                 ('size', '大小', 92), ('status', '状态', 102), ('wb', '回写', 98)]
         for c, t, w in heads:
             self.tree.heading(c, text=t)
             anchor = 'center' if c in ('check', 'size', 'status', 'wb') else 'w'
@@ -959,7 +1122,7 @@ class App(tk.Tk):
         self.tree.tag_configure('fail', foreground='#c0392b')
         self.tree.tag_configure('work', foreground='#1a5fb4')
 
-        ops = ttk.Frame(self)
+        ops = ttk.Frame(self.bottom_area)
         ops.pack(fill='x', padx=10)
         ttk.Button(ops, text='全选', command=lambda: self.set_all(True)).pack(side='left')
         ttk.Button(ops, text='全不选', command=lambda: self.set_all(False)).pack(side='left', padx=4)
@@ -967,7 +1130,7 @@ class App(tk.Tk):
         ttk.Button(ops, text='清空列表', command=self.clear_tasks).pack(side='left', padx=4)
 
         # ===== 进度与日志 =====
-        prog = ttk.Frame(self, padding=(10, 6))
+        prog = ttk.Frame(self.bottom_area, padding=(10, 6))
         prog.pack(fill='x')
         self.pvar = tk.StringVar(value='就绪')
         ttk.Label(prog, textvariable=self.pvar).pack(anchor='w')
@@ -976,7 +1139,7 @@ class App(tk.Tk):
 
         # ===== 底部：醒目的开始合并按钮 + 停止 =====
         # 使用原生 tk.Button，颜色渲染最稳定（ttk 自定义样式在原生主题下会显示空白）
-        bottom = ttk.Frame(self, padding=(10, 0, 10, 8))
+        bottom = ttk.Frame(self.bottom_area, padding=(10, 0, 10, 8))
         bottom.pack(fill='x')
         bar = ttk.Frame(bottom)
         bar.pack(fill='x', pady=(2, 6))
@@ -985,38 +1148,162 @@ class App(tk.Tk):
             bar, text='▶ 开始合并选中项', command=self.start_merge,
             bg='#0a8f4e', fg='white', activebackground='#0fae61',
             activeforeground='white', disabledforeground='#cfd8d3',
-            font=('Microsoft YaHei UI', 14, 'bold'),
-            relief='raised', bd=1, padx=26, pady=9, cursor='hand2')
+            font=('Microsoft YaHei UI', 15, 'bold'),
+            relief='raised', bd=1, padx=26, pady=10, cursor='hand2')
         self.start_btn.pack(side='right')
 
         self.stop_btn = tk.Button(
             bar, text='■ 停止（取消手机读取）', command=self.stop_phone_op,
             bg='#d9534f', fg='white', activebackground='#c9302c',
             activeforeground='white', disabledforeground='#e6b8b6',
-            font=('Microsoft YaHei UI', 10),
-            relief='raised', bd=1, padx=14, pady=6, cursor='hand2', state='disabled')
+            font=('Microsoft YaHei UI', 11),
+            relief='raised', bd=1, padx=14, pady=7, cursor='hand2', state='disabled')
         self.stop_btn.pack(side='right', padx=(0, 10))
 
         ttk.Label(bar, text='先在上方列表勾选要合并的视频 → 点右侧绿色大按钮',
-                  foreground='#888').pack(side='left')
+                  style='Muted.TLabel').pack(side='left')
 
-        self.log_box = tk.Text(bottom, height=7, state='disabled', background='#1e1e1e',
-                               foreground='#d4d4d4', font=('Consolas', 9))
+        self.log_box = tk.Text(bottom, height=5, state='disabled', background='#1e1e1e',
+                               foreground='#d4d4d4', font=('Consolas', 10))
         self.log_box.pack(fill='both', expand=True)
 
         # 菜单
-        menubar = tk.Menu(self)
-        m_set = tk.Menu(menubar, tearoff=0)
-        m_set.add_command(label='手动指定 ffmpeg.exe…', command=self.specify_ffmpeg)
-        m_set.add_command(label='自动下载 FFmpeg…', command=lambda: self.offer_ffmpeg_download(force=True))
-        menubar.add_cascade(label='设置', menu=m_set)
-        m_help = tk.Menu(menubar, tearoff=0)
-        m_help.add_command(label='使用说明', command=self.show_help)
-        m_help.add_command(label='关于', command=self.show_about)
-        menubar.add_cascade(label='帮助', menu=m_help)
-        self.config(menu=menubar)
+        # 菜单已在顶部自绘菜单栏中创建（见 _build_ui 开头）
 
         self.protocol('WM_DELETE_WINDOW', self.on_close)
+
+    # ------------------------------------------------------------ 外观主题
+    def set_theme_pref(self, pref):
+        self.theme_pref = pref
+        self.cfg['theme'] = pref
+        save_config(self.cfg)
+        self._last_sys_dark = system_prefers_dark()
+        self.apply_theme(resolve_dark(pref))
+
+    def _watch_system_theme(self):
+        """跟随系统时，系统切换深浅色后自动同步（含标题栏）。"""
+        try:
+            cur = system_prefers_dark()
+            if cur != self._last_sys_dark:
+                self._last_sys_dark = cur
+                if self.theme_pref == 'auto':
+                    self.apply_theme(cur)
+        except Exception:
+            pass
+        try:
+            self.after(2000, self._watch_system_theme)
+        except Exception:
+            pass
+
+    def apply_theme(self, dark):
+        p = THEME_DARK if dark else THEME_LIGHT
+        CURRENT_THEME['dark'] = dark
+        CURRENT_THEME['p'] = p
+        self._dark = dark
+
+        self.configure(bg=p['bg'])
+        style = ttk.Style(self)
+        try:
+            style.theme_use('clam' if dark else 'vista')
+        except Exception:
+            pass
+
+        style.configure('.', background=p['bg'], foreground=p['fg'])
+        style.configure('TFrame', background=p['bg'])
+        style.configure('TLabelframe', background=p['bg'], bordercolor=p['line'],
+                        relief='flat', borderwidth=1, lightcolor=p['bg'],
+                        darkcolor=p['bg'])
+        style.configure('TLabelframe.Label', background=p['bg'], foreground=p['fg'])
+        style.configure('TLabel', background=p['bg'], foreground=p['fg'])
+        style.configure('Muted.TLabel', background=p['bg'], foreground=p['muted'])
+        style.configure('Warn.TLabel', background=p['bg'], foreground=p['warn'])
+
+        style.configure('TButton', background=p['panel'], foreground=p['fg'],
+                        bordercolor=p['line'], relief='flat', padding=(12, 6),
+                        focusthickness=0, focuscolor=p['bg'],
+                        lightcolor=p['panel'], darkcolor=p['panel'])
+        style.map('TButton',
+                  background=[('active', p['head_bg']), ('pressed', p['head_bg']),
+                              ('disabled', p['panel'])],
+                  foreground=[('disabled', p['muted'])],
+                  lightcolor=[('active', p['head_bg']), ('pressed', p['head_bg'])],
+                  darkcolor=[('active', p['head_bg']), ('pressed', p['head_bg'])])
+        style.configure('TEntry', fieldbackground=p['field'], foreground=p['fg'],
+                        bordercolor=p['line'], insertcolor=p['fg'], padding=(6, 5),
+                        lightcolor=p['field'], darkcolor=p['field'],
+                        borderwidth=1, relief='flat')
+        style.configure('TCombobox', fieldbackground=p['field'], background=p['panel'],
+                        foreground=p['fg'], arrowcolor=p['fg'],
+                        bordercolor=p['line'], padding=(6, 5),
+                        lightcolor=p['field'], darkcolor=p['field'])
+        style.map('TCombobox',
+                  fieldbackground=[('readonly', p['field'])],
+                  foreground=[('readonly', p['fg'])],
+                  background=[('active', p['head_bg'])])
+        style.configure('TCheckbutton', background=p['bg'], foreground=p['fg'],
+                        focuscolor=p['bg'], indicatorcolor=p['field'],
+                        indicatormargin=(0, 0, 8, 0))
+        style.map('TCheckbutton',
+                  background=[('active', p['bg'])],
+                  foreground=[('disabled', p['muted'])],
+                  indicatorcolor=[('selected', p['accent']), ('active', p['head_bg'])])
+        style.configure('Treeview', background=p['panel'], fieldbackground=p['panel'],
+                        foreground=p['fg'], bordercolor=p['line'],
+                        rowheight=30, borderwidth=1, relief='flat',
+                        lightcolor=p['line'], darkcolor=p['line'])
+        style.map('Treeview', background=[('selected', p['sel_bg'])],
+                  foreground=[('selected', p['sel_fg'])])
+        style.configure('Treeview.Heading', background=p['head_bg'],
+                        foreground=p['fg'], relief='flat', bordercolor=p['line'],
+                        padding=(6, 7), lightcolor=p['head_bg'],
+                        darkcolor=p['head_bg'])
+        style.map('Treeview.Heading', background=[('active', p['head_bg'])])
+        style.configure('TNotebook', background=p['bg'], bordercolor=p['line'],
+                        borderwidth=0, lightcolor=p['bg'], darkcolor=p['bg'])
+        style.configure('TNotebook.Tab', background=p['head_bg'], foreground=p['muted'],
+                        padding=(18, 8), bordercolor=p['line'], borderwidth=0,
+                        lightcolor=p['head_bg'], darkcolor=p['head_bg'])
+        style.map('TNotebook.Tab',
+                  background=[('selected', p['panel'])],
+                  foreground=[('selected', p['fg'])],
+                  lightcolor=[('selected', p['panel'])],
+                  darkcolor=[('selected', p['panel'])])
+        style.configure('TProgressbar', background=p['accent'],
+                        troughcolor=p['panel'], bordercolor=p['line'], thickness=12,
+                        lightcolor=p['accent'], darkcolor=p['accent'])
+        for sb in ('TScrollbar', 'Vertical.TScrollbar', 'Horizontal.TScrollbar'):
+            style.configure(sb, background=p['panel'], troughcolor=p['bg'],
+                            bordercolor=p['line'], arrowcolor=p['fg'],
+                            borderwidth=0, lightcolor=p['panel'],
+                            darkcolor=p['panel'])
+
+        try:
+            self.tree.tag_configure('done', foreground=p['done'])
+            self.tree.tag_configure('fail', foreground=p['fail'])
+            self.tree.tag_configure('work', foreground=p['work'])
+        except Exception:
+            pass
+
+        try:
+            self.topbar.configure(bg=p['bg'])
+            for mb in getattr(self, '_mb_list', []):
+                mb.configure(bg=p['bg'], fg=p['fg'], activebackground=p['head_bg'],
+                             activeforeground=p['fg'], disabledforeground=p['muted'],
+                             highlightthickness=0, bd=0, relief='flat')
+            self.mb_sep.configure(bg=p['line'])
+        except Exception:
+            pass
+
+        for m in getattr(self, '_menus', []):
+            try:
+                m.configure(bg=p['panel'], fg=p['fg'], activebackground=p['sel_bg'],
+                            activeforeground=p['sel_fg'], selectcolor=p['accent'],
+                            disabledforeground=p['muted'], bd=0, relief='flat')
+            except Exception:
+                pass
+
+        self.update_idletasks()
+        set_dark_titlebar(self, dark)
 
     # ------------------------------------------------------------ 日志/队列
     def log(self, msg):
@@ -1527,11 +1814,14 @@ class App(tk.Tk):
         win.title('下载 FFmpeg')
         win.geometry('460x150')
         win.transient(self)
+        win.configure(bg=CURRENT_THEME['p']['bg'])
         ttk.Label(win, text='准备下载…').pack(pady=10)
         pb = ttk.Progressbar(win, maximum=1000, length=400)
         pb.pack(pady=4)
         info = tk.StringVar()
         ttk.Label(win, textvariable=info).pack(pady=6)
+        win.update_idletasks()
+        set_dark_titlebar(win, CURRENT_THEME['dark'])
 
         def cb(frac, text):
             self.after(0, lambda: (pb.configure(value=max(frac, 0) * 1000), info.set(text)))
@@ -1564,13 +1854,15 @@ class App(tk.Tk):
             '   再用「选择手机上的其他文件夹」选中它。\n\n'
             '3. 手动模式：分别选择 video.m4s 和 audio.m4s。\n\n'
             '合并原理：FFmpeg 流复制（不重编码），速度接近文件复制，音画保持原始同步。\n'
-            'index.json 是 B站缓存的分片索引，工具会自动解析。')
+            'index.json 是 B站缓存的分片索引，工具会自动解析。\n\n'
+            '外观：默认跟随 Windows 深/浅色自动切换（含标题栏）；可在\n'
+            '「设置 → 外观」里固定为浅色模式或深色模式，选择会被记住。')
 
     def show_about(self):
         # 版权声明：作者 wan，B站 UID 500886854，保留原创权
         messagebox.showinfo(
             '关于',
-            'B站缓存合并工具 v2.1\n\n'
+            'B站缓存合并工具 v2.5\n\n'
             '作者：wan\n'
             'B站主页：https://space.bilibili.com/500886854\n\n'
             '本工具为个人原创作品，保留全部原创权利。\n'
@@ -1589,7 +1881,49 @@ class App(tk.Tk):
         self.destroy()
 
 
+def selftest():
+    """隐藏自检：不显示窗口，检查内嵌资源与主题是否可用（打包后验证用）。"""
+    import tempfile
+    lines = []
+    lines.append('ffmpeg=' + str(find_ffmpeg({})))
+    lines.append('ps1=' + str(os.path.isfile(HELPER_PS1)) + ' -> ' + HELPER_PS1)
+    lines.append('dark_system=' + str(system_prefers_dark()))
+    app = App()
+    app.withdraw()
+    app.update_idletasks()
+    s = ttk.Style(app)
+    lines.append('theme=' + s.theme_use())
+    lines.append('tree_bg=' + str(s.lookup('Treeview', 'background')))
+    lines.append('root_bg=' + str(app.cget('bg')))
+    lines.append('native_menu=' + repr(app.cget('menu')))
+    lines.append('topbar_bg=' + str(app.topbar.cget('bg')))
+    lines.append('mb_bg=' + str(app.mb_set.cget('bg')))
+    lines.append('mb_fg=' + str(app.mb_set.cget('fg')))
+    try:
+        import tkinter.font as tkfont
+        f0 = tkfont.nametofont('TkDefaultFont')
+        lines.append('font=%s %s' % (f0.actual('family'), f0.actual('size')))
+        lines.append('rowheight=' + str(s.lookup('Treeview', 'rowheight')))
+        lines.append('line_color=' + str(s.lookup('Treeview', 'bordercolor')))
+    except Exception:
+        pass
+    lines.append('version_title=' + app.title())
+    app.destroy()
+    path = os.path.join(tempfile.gettempdir(), 'bili_selftest.txt')
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write('\n'.join(lines))
+    print('\n'.join(lines))
+    return 0
+
+
 def main():
+    if '--selftest' in sys.argv:
+        try:
+            return selftest()
+        except Exception:
+            import traceback
+            app_print(traceback.format_exc())
+            return 1
     os.makedirs(WORK_DIR, exist_ok=True)
     app = App()
     app.mainloop()

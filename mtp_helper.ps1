@@ -32,6 +32,19 @@ function Fail($code, $msg) {
     exit 0
 }
 
+# MTP 文件的 .Size 经常返回 0，按多种属性依次兜底尝试
+function Get-SizeResilient($item) {
+    if (-not $item) { return [int64]0 }
+    try { $v = [int64]$item.Size; if ($v -gt 0) { return $v } } catch {}
+    foreach ($prop in @('System.Size', 'Size', 'System.FileSize')) {
+        try {
+            $v = [int64]$item.ExtendedProperty($prop)
+            if ($v -gt 0) { return $v }
+        } catch {}
+    }
+    return [int64]0
+}
+
 function Walk-Tree($folder, $rel, $depth, $progFile) {
     if ($depth -gt 8) { return }
     $items = @($folder.Items())
@@ -154,7 +167,7 @@ try {
 
     function Item-Info($it) {
         $sz = $null
-        try { if (-not $it.IsFolder) { $sz = [int64]$it.Size } } catch {}
+        try { if (-not $it.IsFolder) { $sz = Get-SizeResilient $it } } catch {}
         return [pscustomobject]@{ name = $it.Name; isFolder = [bool]$it.IsFolder; size = $sz }
     }
 
@@ -286,8 +299,8 @@ try {
                     if ($obj.video_quality) { $quality = [string]$obj.video_quality }
                     elseif ($obj.video -and $obj.video.quality) { $quality = [string]$obj.video.quality }
                     $vsize = 0; $asize = 0
-                    try { if ($vItem) { $vsize = [int64]$vItem.Size } } catch {}
-                    try { if ($aItem) { $asize = [int64]$aItem.Size } } catch {}
+                    try { if ($vItem) { $vsize = Get-SizeResilient $vItem } } catch {}
+                    try { if ($aItem) { $asize = Get-SizeResilient $aItem } } catch {}
 
                     $row = [pscustomobject]@{
                         rel = $e.rel; title = $title; page = $page; part = $part
